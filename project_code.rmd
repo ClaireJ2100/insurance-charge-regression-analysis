@@ -1,0 +1,259 @@
+---
+title: "R Notebook"
+output: pdf_document
+---
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+# Loading the Dataset
+
+```{r}
+library(leaps)
+library(dplyr)
+insurance <- read.csv("insurance.csv")
+insurance <- subset(insurance, select = -1) # get rid of the index table
+head(insurance)
+```
+
+# Data Processing
+
+Checking for null values
+
+```{r}
+any(is.na(insurance))
+```
+
+There are no null values, getting the summary
+
+```{r}
+print(length(insurance$children))
+print(colnames(insurance))
+```
+We can see that we have 1338 rows of data - the data types are as follows
+
+- Age: The age of the customer. (Continuous)
+- Children: The number of children the customer has. (Continuous)
+- Smoker: Whether or not the customer is a smoker. (Categorical)
+- Region: The region the customer lives in. (Categorical)
+- BMI: The customer’s Body Mass Index (Continuous)
+- Sex: The customer’s gender (Categorical)
+- Charges (Response): The insurance charges for the customer. (Continuous)
+
+We'll turn categorical variables into factors
+
+```{r}
+insurance$smoker <- as.factor(insurance$smoker)
+insurance$sex <- as.factor(insurance$sex)
+insurance$region <- as.factor(insurance$region)
+```
+
+
+# Data Summary
+
+From the summary - we can see that a within the dataset, we can learn a bit more about the distribution of our data
+
+```{r}
+summary(insurance)
+```
+- Age: spans from 18 - 64 and with a mean of 39.21 and a median of 39
+- Sex: there are 662 female examples and 676 male examples - there's no imbalance in either classes
+- Children: spans from 1 to 5 children with a version having an average of 1.095 kids and a median of 1 kids 
+- Smoker: there are 1064 non-smokers and 274 smokers - it might be important to note the under-representation of smokers in this dataset
+- Region: there are 4 regions - the northeast, northwest, southeast and southwest, all of which are equally represented in the dataset
+- Charges: this is the response variable with ranging from \$1122 to \$63770 with a median charge of \$9382 and a mean charge of \$13270
+
+## Analyzing Relationships Between Variables
+
+We will do a correlation matrix for the continous variables
+```{r}
+continuous_col <- insurance[,c("age", "bmi", "children")]
+head(continuous_col)
+```
+```{r}
+cormat <- round(cor(continuous_col),2)
+library(reshape2)
+melted_cormat <- melt(cormat)
+print(melted_cormat)
+library(ggplot2)
+ggplot(data = melted_cormat, aes(x=Var1, y=Var2, fill=value, label = value)) + 
+  geom_tile() +
+  labs(x = NULL, y = NULL, title = "Correlation for Continous Variables in the Insurance Dataset")
+```
+
+```{r}
+library("PerformanceAnalytics")
+chart.Correlation(continuous_col, histogram=TRUE, pch=19)
+```
+In the above plot:
+- The distribution of each variable is shown on the diagonal.
+- On the bottom of the diagonal : the bivariate scatter plots with a fitted line are displayed
+- On the top of the diagonal : the value of the correlation plus the significance level as stars
+- Each significance level is associated to a symbol : p-values(0, 0.001, 0.01, 0.05, 0.1, 1) <=> symbols(“***”, “**”, “*”, “.”, " “)
+
+
+If we wanted to do a correlation matrix/heatmap for ALL varialbes - we need to to do one-hot encoding for all non-numeric numerical 
+which most regression models would do anyway. From there, we can do 
+```{r}
+library(ggcorrplot)
+model.matrix(~0+., data=insurance) %>% 
+  cor(use="pairwise.complete.obs") %>% 
+  ggcorrplot(show.diag=FALSE, type="lower", lab=TRUE, lab_size=2)
+```
+
+# Viz of the Features Against the Response Variable
+
+```{r}
+plot(charges ~ age, data = insurance, main="Charges vs Age", 
+        ylab = "Charges ($)",
+        xlab="Age (years)")
+```
+```{r}
+plot(charges ~ bmi, data = insurance, main="Charges vs BMI", 
+        ylab = "Charges ($)",
+        xlab="BMI")
+```
+Even though this was continuous, modelling `children` as categorical variables made a bit more sense
+```{r}
+# plot(charges ~ children, data = insurance, main="Charges vs Number of Children", 
+#         ylab = "Charges ($)",
+#         xlab="Number of Children")
+
+p2 <- ggplot(insurance, aes(x = as.factor(children), y = charges))
+p2 <- p2 + geom_boxplot(alpha = 0.25) 
+# p2 <- p2 + geom_point(aes(fill = as.factor(colour)), size = 1.5, shape = 21,
+#                        colour = rgb(1, 1, 1, 0), position = position_jitterdodge())
+p2 <- p2 + xlab("Number of Children") + ylab("Charges ($)") + ggtitle("Distribution of Breaking Strength (Paritioned by Number of Children)")
+p2
+# p2 <- p2 + scale_fill_discrete(name = "Stick Colour", labels=c('Beige', 'Coloured'))
+```
+
+```{r}
+p2 <- ggplot(insurance, aes(x = as.factor(sex), y = charges))
+p2 <- p2 + geom_boxplot(alpha = 0.25) 
+p2 <- p2 + xlab("Sex") + ylab("Charges ($)") + ggtitle("Distribution of Breaking Strength (Paritioned by Number of Sex)")
+p2
+```
+
+```{r}
+p2 <- ggplot(insurance, aes(x = as.factor(smoker), y = charges))
+p2 <- p2 + geom_boxplot(alpha = 0.25) 
+p2 <- p2 + xlab("Smoker") + ylab("Charges ($)") + ggtitle("Distribution of Breaking Strength (Paritioned by whether an individual smoke)")
+p2
+```
+
+```{r}
+p2 <- ggplot(insurance, aes(x = as.factor(region), y = charges))
+p2 <- p2 + geom_boxplot(alpha = 0.25) 
+p2 <- p2 + xlab("Sex") + ylab("Charges ($)") + ggtitle("Distribution of Breaking Strength (Paritioned by Region)")
+p2
+```
+
+# Model selection and evaluation section of STAT 306 group project
+
+We see from the EDA that there appears to be a linear relation between each of age and smoking status with the insurance charge response variable. There does also seem to be a relationship between bmi and charges, but it is much less clear.
+
+Let us use R to automatically give us the "Best" model for all numbers of variables.
+
+```{r}
+insurance$smoker = as.factor(insurance$smoker)
+insurance$region = as.factor(insurance$region)
+insurance$sex = as.factor(insurance$sex)
+insurance$children = as.factor(insurance$children)
+
+summary(regsubsets(charges~.,data=insurance, nvmax=12))
+
+```
+
+From this result, we see what the "best" model for each number of parameter should include as variables. For example, we should include age and smoker status for a model with 2 variables. The sex is never included in any model.
+
+## Model using only Age and Smoking
+
+Let's first try fitting a linear model with just the age and smoking status and no transformations.
+
+```{r}
+
+ageSmokingModel = lm(charges ~ smoker+age, data=insurance )
+summary(ageSmokingModel)
+AIC(ageSmokingModel)
+```
+
+We see from the model that both of the terms seem to be significant, just as expected. The interpretation of this model is that assuming all other factors constant, a smoker would on average be charged \$23855.3 more than non-smokers. Also, for every year increase in the age of the insuree, they are on average charged \$274.87 more for their insurance.
+
+The Adjusted R-squared as well as the f-statistic seem to be quite good, with the adjusted R-squared being 0.721, and the f-statistic p-value incredibly significant at 2.2e-16, indicating that this model may be a decent predictor of insurance charges.
+
+The AIC obtained from this model is 27253.32.
+
+Let us plot the residuals for this model.
+
+```{r}
+plot(ageSmokingModel$fitted.values,rstandard(ageSmokingModel), xlab="Predicted Values", ylab= "Standardized Residual", main = "Residual Plot of Age+Smoking Model")
+
+```
+
+From this residual plot, it actually seems that the prediction may not be as good as we imagined. There is a huge gap between 15000 and 27000 where there are no predicted values. Furthermore, we see that there does seem to be some sort of trend, in which the residuals trend downwards as the fitted values go up.
+
+## Model using Age and Smoking and their Interaction
+
+We may suspect that there is interaction between age and smoking. Let us fit a model for this.
+
+```{r}
+ageSmokingIntModel = lm(charges ~ smoker+age + smoker:age, data=insurance )
+summary(ageSmokingIntModel)
+AIC(ageSmokingIntModel)
+
+```
+
+Fitting the interaction term did not seem to improve the model by much, as well it increased the AIC to 27253.83. Therefore, the interaction term should probably be excluded for this case.
+
+## Model using Age, Smoking, and BMI
+
+Like the regsubsets function suggests, we may attempt fitting a model with 3 models: age, smoking, and BMI.
+
+```{r}
+threeVarModel = lm(charges ~ smoker+age +bmi, data=insurance )
+summary(threeVarModel)
+AIC(threeVarModel)
+plot(threeVarModel$fitted.values,rstandard(threeVarModel), xlab="Predicted Values", ylab= "Standardized Residual", main="Residual Plot of Age + Smoking + BMI Model")
+```
+
+This improved the AIC greatly. It also appears to somewhat improve the residuals plot.
+
+## Full Model
+
+Supposed we believe that all of the variables in the data seem like they could affect charges, though it is obviously unclear at the moment how significant they are. To analyze this, we should fit a full model, using all of the variables we have.
+
+```{r}
+fullModel = lm(charges ~ smoker+age +bmi+sex+children+region, data=insurance )
+summary(fullModel)
+AIC(fullModel)
+```
+
+The sex variable does not seem nearly significant enough to include them in this model. We may interpret it as not differing enough from the baseline of female. This model does better in other statistics compared to our model with 2 variables, which is likely mostly due to the addition of the bmi variable. There are some other dummy variables that are not significant. We suspect that the region may not be significant enough, and that its significance is only due to its correlation with variables such as smoking status or bmi.
+
+## Reduced Model
+
+Let us remove the sex and region variables from the full model and assess its performance.
+
+```{r}
+reducedModel = lm(charges ~ smoker+age +bmi+children, data=insurance )
+summary(reducedModel)
+AIC(reducedModel)
+plot(reducedModel$fitted.values,rstandard(reducedModel), xlab="Predicted Values", ylab= "Standardized Residual")
+
+```
+
+This is the best model we have fitted so far, with the lowest AIC. Furthermore, the standardized residuals plot now looks generally patternless.
+
+## Quadratic BMI Model
+
+For our final model to evaluate, let us attempt to add a quadratic BMI term , as we may suspect a quadratic relationship between BMI and the charges, as shown by the exploratory data analysis.
+
+```{r}
+insurance$bmi2 = insurance$bmi^2
+quadBMIModel = lm(charges ~ smoker+age +bmi+bmi2+children, data=insurance ) 
+summary(quadBMIModel)
+AIC(quadBMIModel)
+plot(quadBMIModel$fitted.values,rstandard(quadBMIModel), xlab="Predicted Values", ylab= "Standardized Residual")
+```
+
+The quadratic term is significant enough to indicate a possible quadratic relation. This also gives us the best AIC so far. Therefore, we choose this model to be our final model.
